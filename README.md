@@ -1,40 +1,169 @@
-# 🌞 PV-Meteorology-LLM：光伏与气象时空预测全栈大模型系统
+# PV-Meteorology-LLM
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Base_Model-DeepSeek_R1_1.5B-blue.svg" alt="Base Model">
-  <img src="https://img.shields.io/badge/Fine_Tuning-LoRA-orange.svg" alt="Fine Tuning">
-  <img src="https://img.shields.io/badge/Framework-LLaMA_Factory-green.svg" alt="Framework">
-  <img src="https://img.shields.io/badge/Serving-FastAPI_%7C_SpringBoot-red.svg" alt="Serving">
-</p>
+面向光伏与气象时空预测场景的垂直大模型工程实践，覆盖如下流程：
 
-## 🎯 项目定位
-本项目是一个针对**新能源与气象时空预测交叉领域**的垂直大模型全栈解决方案。
-通用大模型在面对复杂的物理方程、扩散模型（Diffusion）架构设计时极易产生幻觉。本项目通过注入领域专家高质量数据，纠正了传统模型盲目使用全局太阳高度角/方位角（SZA/AZI）的误区，并打通了从 **“云端 GPU 微调 -> 模型合并 -> FastAPI 接口暴露 -> Java 后端业务集成 -> Web 前端展示”** 的完整工业级 AI 部署链路。
+1. 领域数据构建
+2. LoRA 微调
+3. LoRA 合并基座模型
+4. FastAPI 推理服务
+5. Java 后端接入
 
-## ✨ 核心功能点
-* **⚡️ 领域知识精准强化 (Domain-Specific LoRA)**：基于深层次的时空上下文融合策略微调，对 U-Net 主输入设计、特征淹没、归纳偏置等硬核物理与深度学习概念实现“零幻觉”精准问答。
-* **🛠️ 低代码高效微调引擎**：深度集成 `LLaMA-Factory`，采用低秩矩阵分解（LoRA）进行部分参数微调，极大地降低了算力成本并防止过拟合。
-* **🚀 高性能推理服务 (Model Serving)**：基于 `FastAPI` 构建轻量级 Python 推理网关，支持 GPU 显存动态分配与多轮对话生成。
-* **🔗 业务解耦的全栈架构**：标准化的 RESTful API 设计，支持 `Spring Boot` 等企业级后端无缝接入，构建从底层算力到顶层 UI 的全业务闭环。
+## 项目说明
 
-## 🏗️ 技术架构图
+本项目基于 DeepSeek-R1-Distill-Qwen-1.5B 和 LLaMA-Factory，针对新能源与气象场景进行领域适配，目标是提升以下问题的回答质量：
 
-```mermaid
-graph TD
-    %% 前端与后端
-    Client[Web前端 UI / 交互界面] -->|HTTP / JSON| Backend[Java Spring Boot 后端]
-    Backend -->|业务处理 & 鉴权| Backend
-    Backend -->|REST GET/POST 调用| API[FastAPI 推理网关]
-    
-    %% 模型层
-    subgraph AI Server [云端 GPU 服务器 (AutoDL / 本地服务器)]
-        API --> Engine[Transformers 推理引擎]
-        Engine --> Model[已合并的大模型]
-        
-        subgraph Model Weights
-            Base[基座模型: DeepSeek-R1-Distill-Qwen-1.5B]
-            LoRA[LoRA 权重: PV-Meteorology 领域知识]
-            Base -.融合.-> LoRA
-        end
-        Model --> Model Weights
-    end
+1. 光伏预测中的时空建模设计
+2. 扩散模型条件注入策略
+3. 物理先验与数据驱动特征的取舍
+
+## 环境要求
+
+推荐 Linux + NVIDIA GPU 环境。
+
+当前实践版本建议：
+
+1. Python 3.11
+2. PyTorch >= 2.6（已知安全限制，低版本可能触发 torch.load 限制）
+
+## 一、训练环境准备
+
+```bash
+conda create -n llama-factory python=3.11 -y
+conda activate llama-factory
+
+git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git
+cd LLaMA-Factory
+
+pip install -e ".[torch,metrics]"
+
+# 按 CUDA 12.4 轮子安装（不改服务器驱动）
+python -m pip install --upgrade --no-cache-dir \
+    torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+    --index-url https://download.pytorch.org/whl/cu124
+```
+
+可选验证：
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+```
+
+## 二、下载基座模型
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+pip install -U huggingface_hub
+huggingface-cli download --resume-download deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+```
+
+## 三、数据集格式与注册
+
+自定义数据集采用 Alpaca 格式（无 input 字段），示例：
+
+```json
+[
+    {
+        "instruction": "问题...",
+        "output": "回答..."
+    }
+]
+```
+
+在 data/dataset_info.json 中注册时，建议显式映射列，避免 KeyError: 'input'：
+
+```json
+"PV": {
+    "file_name": "PV.json",
+    "columns": {
+        "prompt": "instruction",
+        "response": "output"
+    }
+}
+```
+
+## 四、启动微调
+
+```bash
+llamafactory-cli webui
+```
+
+在 WebUI 中：
+
+1. 选择基座模型路径
+2. 选择数据集 PV
+3. 配置 LoRA 参数并开始训练
+
+训练后输出目录通常在：
+
+```text
+/vision/lc/saves/<base_model_name>/lora/train_YYYY-MM-DD-HH-MM-SS
+```
+
+## 五、导出并合并模型
+
+在 WebUI 的 Export 页签中，将 LoRA 适配器合并到基座模型，导出到例如：
+
+```text
+/vision/lc/LLM/my project/deepseek-r1-1.5b-merged
+```
+
+## 六、FastAPI 推理服务
+
+```bash
+conda create -n fastapi python=3.11 -y
+conda activate fastapi
+pip install fastapi uvicorn transformers torch safetensors sentencepiece protobuf
+```
+
+示例接口：
+
+```python
+from fastapi import FastAPI
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+app = FastAPI()
+
+model_path = "/path/to/deepseek-r1-1.5b-merged"
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForCausalLM.from_pretrained(model_path).to("cuda")
+
+
+@app.get("/generate")
+async def generate_text(prompt: str):
+        inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+        outputs = model.generate(inputs["input_ids"], max_length=512)
+        return {"generated_text": tokenizer.decode(outputs[0], skip_special_tokens=True)}
+```
+
+启动：
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+## 七、Java Spring Boot 接入示例
+
+```java
+@Service
+public class ChatServiceImpl implements ChatService {
+        @Autowired
+        private RestTemplate restTemplate;
+
+        @Override
+        public String callAiForOneReply(String prompt) {
+                String url = String.format("http://GPU_SERVER_IP:8000/generate?prompt=%s", prompt);
+                GenerateResponse response = restTemplate.getForObject(url, GenerateResponse.class);
+                return response != null ? response.getGenerated_text() : "系统繁忙";
+        }
+}
+```
+
+## 常见问题
+
+1. 报错 KeyError: 'input'
+原因：数据是 instruction/output 格式，但未在 dataset_info.json 中显式列映射。
+解决：为该数据集添加 prompt/response 映射。
+
+2. 报错要求 torch >= 2.6
+原因：torch.load 安全限制。
+解决：仅升级 torch 到 2.6+ 即可，不需要改服务器 CUDA 驱动。
